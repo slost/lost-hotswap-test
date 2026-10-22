@@ -1,0 +1,7 @@
+.godot/
+/build/*
+!/build/.gdignore
+/manifest.json
+/assets/status.html
+*.tmp
+export_presets.cfg.bak

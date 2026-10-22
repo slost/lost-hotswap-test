@@ -1,0 +1,100 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scenes/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://addons/lost_framework/modules/asset_manager/hotswap_sprite.gd" id="2_sprite"]
+[ext_resource type="Script" path="res://addons/lost_framework/modules/asset_manager/hotswap_texture_rect.gd" id="3_logo"]
+[ext_resource type="Script" path="res://addons/lost_framework/modules/asset_manager/hotswap_audio.gd" id="4_audio"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_main")
+
+[node name="Player" type="Sprite2D" parent="."]
+position = Vector2(220, 240)
+scale = Vector2(2, 2)
+script = ExtResource("2_sprite")
+asset_id = "tex_player"
+
+[node name="Bgm" type="AudioStreamPlayer" parent="."]
+script = ExtResource("4_audio")
+asset_id = "bgm_menu"
+loop_stream = true
+play_on_ready = true
+
+[node name="JumpSfx" type="AudioStreamPlayer" parent="."]
+script = ExtResource("4_audio")
+asset_id = "sfx_jump"
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="UI" type="Control" parent="CanvasLayer"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Title" type="Label" parent="CanvasLayer/UI"]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 16.0
+offset_right = 900.0
+offset_bottom = 56.0
+theme_override_font_sizes/font_size = 28
+text = "Lost hot-swap test"
+
+[node name="PlayerCaption" type="Label" parent="CanvasLayer/UI"]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 300.0
+offset_right = 420.0
+offset_bottom = 336.0
+theme_override_font_sizes/font_size = 18
+text = "HotSwapSprite  tex_player"
+
+[node name="Logo" type="TextureRect" parent="CanvasLayer/UI"]
+layout_mode = 0
+offset_left = 560.0
+offset_top = 80.0
+offset_right = 880.0
+offset_bottom = 240.0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+script = ExtResource("3_logo")
+asset_id = "ui_logo"
+
+[node name="LogoCaption" type="Label" parent="CanvasLayer/UI"]
+layout_mode = 0
+offset_left = 560.0
+offset_top = 248.0
+offset_right = 920.0
+offset_bottom = 284.0
+theme_override_font_sizes/font_size = 18
+text = "HotSwapTextureRect  ui_logo"
+
+[node name="Status" type="Label" parent="CanvasLayer/UI"]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 360.0
+offset_right = 520.0
+offset_bottom = 520.0
+theme_override_font_sizes/font_size = 20
+text = "mode: off"
+
+[node name="PlayJump" type="Button" parent="CanvasLayer/UI"]
+layout_mode = 0
+offset_left = 560.0
+offset_top = 360.0
+offset_right = 820.0
+offset_bottom = 408.0
+text = "Play sfx_jump"
+
+[node name="Reload" type="Button" parent="CanvasLayer/UI"]
+layout_mode = 0
+offset_left = 560.0
+offset_top = 424.0
+offset_right = 820.0
+offset_bottom = 472.0
+text = "Reload (R)"

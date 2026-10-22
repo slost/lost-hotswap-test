@@ -1,0 +1,152 @@
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide export path
+        id: mode
+        run: |
+          set -euo pipefail
+          fast=false
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            files="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")"
+            echo "Changed files:"
+            printf '%s\n' "$files"
+            if [ -n "$files" ]; then
+              fast=true
+              while IFS= read -r file; do
+                [ -z "$file" ] && continue
+                case "$file" in
+                  assets/*) ;;
+                  *) fast=false ;;
+                esac
+              done <<< "$files"
+            fi
+          fi
+          echo "fast_path=${fast}" >> "$GITHUB_OUTPUT"
+          echo "fast_path=${fast}"
+
+      - name: Restore previous web shell
+        id: shell
+        if: steps.mode.outputs.fast_path == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/shell
+          run_id="$(gh run list --workflow pages.yml --branch main --limit 40 \
+            --json databaseId,conclusion,headSha \
+            --jq '[.[] | select(.conclusion=="success" and .headSha != env.GITHUB_SHA)][0].databaseId')"
+          echo "Previous successful run: ${run_id:-none}"
+          found=false
+          if [ -n "${run_id}" ] && [ "${run_id}" != "null" ]; then
+            rm -rf build/shell
+            mkdir -p build/shell
+            if gh run download "$run_id" -n web-shell -D build/shell; then
+              if [ ! -f build/shell/index.html ]; then
+                nested="$(find build/shell -name index.html -print -quit)"
+                if [ -n "$nested" ]; then
+                  cp -a "$(dirname "$nested")/." build/shell-flat
+                  rm -rf build/shell
+                  mv build/shell-flat build/shell
+                fi
+              fi
+              if [ -f build/shell/index.html ] && [ -f build/shell/index.wasm ]; then
+                found=true
+              fi
+            fi
+          fi
+          echo "found=${found}" >> "$GITHUB_OUTPUT"
+          if [ "$found" = "true" ]; then
+            echo "FAST PATH: skipping Godot export"
+          else
+            echo "FAST PATH: no web shell artifact, falling back to a full export"
+          fi
+
+      - name: Install system libraries
+        if: steps.mode.outputs.fast_path != 'true' || steps.shell.outputs.found != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y unzip curl ca-certificates \
+            libfontconfig1 libx11-6 libxcursor1 libxinerama1 libxrandr2 libxi6 \
+            libgl1 libxext6 libxrender1 libxfixes3 libxkbcommon0
+          sudo apt-get install -y libasound2t64 || sudo apt-get install -y libasound2
+
+      - name: Install Godot 4.8-beta1
+        if: steps.mode.outputs.fast_path != 'true' || steps.shell.outputs.found != 'true'
+        run: bash tools/install_godot.sh
+
+      - name: Export Web
+        if: steps.mode.outputs.fast_path != 'true' || steps.shell.outputs.found != 'true'
+        run: |
+          set -euo pipefail
+          echo "FULL PATH: exporting with Godot"
+          export PATH="${HOME}/.local/godot:${PATH}"
+          mkdir -p build/shell
+          godot --headless --path . --import --quit
+          godot --headless --path . --export-release "Web" "${PWD}/build/shell/index.html"
+          test -f build/shell/index.html
+          test -f build/shell/index.wasm
+          if grep -E -q 'GODOT_THREADS_ENABLED[[:space:]]*=[[:space:]]*true' build/shell/index.html; then
+            echo "Web export enabled thread support; GitHub Pages cannot boot that build." >&2
+            exit 1
+          fi
+
+      - name: Upload web shell
+        if: steps.mode.outputs.fast_path != 'true' || steps.shell.outputs.found != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-shell
+          path: build/shell
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Overlay remote assets
+        run: |
+          set -euo pipefail
+          test -f build/shell/index.html
+          rm -rf build/site
+          mkdir -p build/site
+          cp -a build/shell/. build/site/
+          python3 tools/make_manifest.py --site build/site
+          touch build/site/.nojekyll
+          test -f build/site/manifest.json
+          test -f build/site/assets/status.html
+          python3 -c 'import json; from pathlib import Path; manifest=json.loads(Path("build/site/manifest.json").read_text()); ids=[item["id"] for item in manifest["assets"]]; required=["tex_player","ui_logo","bgm_menu","sfx_jump"]; missing=[item for item in required if item not in ids]; assert not missing, missing; print("manifest ids:", ", ".join(ids))'
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
