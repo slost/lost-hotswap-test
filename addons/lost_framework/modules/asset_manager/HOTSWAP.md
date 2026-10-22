@@ -23,6 +23,8 @@ On a web export, `?assets=off` forces placeholders even when remote mode is enab
 
 `AssetManager.reload()` fetches the manifest again. The demo binds it to the Reload button and the R key.
 
+On the web export, downloads go through `fetch()` and `JavaScriptBridge`. Godot 4.8-beta1's `HTTPRequest` reaches GitHub Pages (the browser gets HTTP 200) and then fails inside `HTTPClientWeb` with `Condition "err != 0 && err != 1" is true. Returning: FAILED`, so `request_completed` is not a success. A plain local HTTP/1.0 server does not hit this. Desktop builds still use `HTTPRequest`. Apply the same split in PR #19 if that branch downloads with `HTTPRequest` on the web export.
+
 ## Nodes
 
 | Node | Base | Exported property |

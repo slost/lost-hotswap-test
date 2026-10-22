@@ -22,9 +22,11 @@ var _placeholder_audio_oneshot: AudioStream
 var _nodes: Array[Node] = []
 var _generation := 0
 var _mode := "off"
+var _web_jobs: Array[Dictionary] = []
 
 
 func _ready() -> void:
+	set_process(false)
 	for id in IDS:
 		_sources[id] = "placeholder"
 	if _remote_allowed():
@@ -222,13 +224,58 @@ func _publish() -> void:
 	status_changed.emit()
 
 
+func _process(_delta: float) -> void:
+	if _web_jobs.is_empty():
+		set_process(false)
+		return
+	# done.call() may queue the next fetch. Take the current batch first so
+	# that new job is not dropped when this function finishes.
+	var batch: Array[Dictionary] = _web_jobs.duplicate()
+	_web_jobs.clear()
+	var now := Time.get_ticks_msec()
+	var still: Array[Dictionary] = []
+	for job in batch:
+		var gen := int(job["gen"])
+		if gen != _generation:
+			continue
+		if now - int(job["started"]) > 20000:
+			push_warning("Hot-swap web fetch timed out for %s" % job["url"])
+			(job["done"] as Callable).call(PackedByteArray(), 0)
+			continue
+		var raw: Variant = JavaScriptBridge.eval("window.__lostFetchPoll(%d)" % int(job["id"]), true)
+		var text := str(raw)
+		if text.is_empty() or text == "null" or text == "<null>":
+			still.append(job)
+			continue
+		var split_at := text.find(" ")
+		var code := 0
+		var body := PackedByteArray()
+		if split_at > 0:
+			code = text.substr(0, split_at).to_int()
+			var encoded := text.substr(split_at + 1)
+			if not encoded.is_empty():
+				body = Marshalls.base64_to_raw(encoded)
+		(job["done"] as Callable).call(body, code)
+	still.append_array(_web_jobs)
+	_web_jobs = still
+	if _web_jobs.is_empty():
+		set_process(false)
+
+
 func _http_get(url: String, gen: int, done: Callable) -> void:
+	# Godot 4.8-beta1's HTTPRequest uses HTTPClientWeb, which fails to finish a
+	# GitHub Pages response (HTTP/2 through the browser fetch wrapper). The
+	# browser returns 200 and the engine reports:
+	#   Condition "err != 0 && err != 1" is true. Returning: FAILED
+	# then request_completed with a non-success result. Read the bytes with
+	# fetch() instead. No custom headers, so the request stays a simple GET.
+	if OS.has_feature("web"):
+		_http_get_web(url, gen, done)
+		return
 	var request := HTTPRequest.new()
 	request.timeout = 20.0
 	request.body_size_limit = 8 * 1024 * 1024
 	add_child(request)
-	# No custom headers: on the web export they trigger a CORS preflight, which
-	# GitHub Pages does not answer. The query string is the cache buster.
 	var err := request.request(url)
 	if err != OK:
 		request.queue_free()
@@ -244,6 +291,47 @@ func _http_get(url: String, gen: int, done: Callable) -> void:
 			return
 		done.call(body, code)
 	, CONNECT_ONE_SHOT)
+
+
+func _http_get_web(url: String, gen: int, done: Callable) -> void:
+	var script := """
+(function (url) {
+  if (!window.__lostFetch) {
+    window.__lostFetchQueue = [];
+    window.__lostFetch = function (target) {
+      var id = window.__lostFetchQueue.length;
+      window.__lostFetchQueue.push("");
+      fetch(target).then(function (response) {
+        return response.arrayBuffer().then(function (buffer) {
+          var bytes = new Uint8Array(buffer);
+          var parts = [];
+          var step = 0x8000;
+          for (var i = 0; i < bytes.length; i += step) {
+            parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + step)));
+          }
+          window.__lostFetchQueue[id] = response.status + " " + btoa(parts.join(""));
+        });
+      }).catch(function () {
+        window.__lostFetchQueue[id] = "0 ";
+      });
+      return id;
+    };
+    window.__lostFetchPoll = function (id) {
+      var item = window.__lostFetchQueue[id];
+      return item ? item : "";
+    };
+  }
+  return window.__lostFetch(url);
+})(%s)""" % JSON.stringify(url)
+	var fetch_id := int(JavaScriptBridge.eval(script, true))
+	_web_jobs.append({
+		"id": fetch_id,
+		"gen": gen,
+		"url": url,
+		"done": done,
+		"started": Time.get_ticks_msec(),
+	})
+	set_process(true)
 
 
 func _query_flag(flag_name: String) -> String:
