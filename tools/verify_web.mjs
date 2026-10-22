@@ -125,16 +125,23 @@ async function main() {
     last = result.result?.value || "";
     if (last.includes(expected)) {
       console.log("STATUS:\n" + last);
-      const logs = client.events
-        .filter((event) => event.method === "Runtime.consoleAPICalled" || event.method === "Runtime.exceptionThrown")
-        .slice(-20)
-        .map((event) => JSON.stringify(event.params).slice(0, 400));
+      const logs = client.events.filter(
+        (event) => event.method === "Runtime.consoleAPICalled" || event.method === "Runtime.exceptionThrown"
+      );
+      const text = logs.map((event) => JSON.stringify(event.params)).join("\n");
+      const bad = text.match(/stream_peer_gzip|err != 0 && err != 1|SCRIPT ERROR|Parse Error/g);
       if (logs.length) {
-        console.log("CONSOLE:");
-        for (const line of logs) console.log(line);
+        console.log(`CONSOLE EVENTS: ${logs.length}`);
+        for (const line of logs.slice(-15).map((event) => JSON.stringify(event.params).slice(0, 500))) {
+          console.log(line);
+        }
       }
       client.close();
       chrome.kill();
+      if (bad) {
+        console.error("LOADER/SCRIPT ERRORS: " + bad.join(", "));
+        process.exit(1);
+      }
       process.exit(0);
     }
     await sleep(500);

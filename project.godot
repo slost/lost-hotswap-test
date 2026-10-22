@@ -1,5 +1,10 @@
 ; Engine configuration file.
-; Godot 4.8-beta1 (version string 4.8.beta1).
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 
@@ -13,7 +18,13 @@ config/icon="res://icon.svg"
 
 [autoload]
 
-AssetManager="*res://addons/lost_framework/modules/asset_manager/asset_manager.gd"
+Refs="*res://addons/lost_framework/core/autoloads/refs.gd"
+Rng="*res://addons/lost_framework/core/autoloads/rng.gd"
+SignalBus="*res://addons/lost_framework/core/autoloads/signal_bus.gd"
+Lost="*res://addons/lost_framework/core/lost_core.gd"
+Audio="*res://addons/lost_framework/modules/audio_manager/audio_manager.module.gd"
+SaveManager="*res://addons/lost_framework/modules/save_manager/save_manager.module.gd"
+Settings="*res://addons/lost_framework/modules/settings/settings.module.gd"
 
 [display]
 
@@ -26,14 +37,15 @@ window/stretch/aspect="expand"
 
 enabled=PackedStringArray("res://addons/lost_framework/plugin.cfg")
 
-[lost_framework]
+[lost_framework/asset_manager]
 
-asset_manager/remote_enabled=true
-asset_manager/base_url="https://slost.github.io/lost-hotswap-test"
+remote_enabled=true
+base_url="assets/"
+max_concurrent=4
 
 [rendering]
 
+textures/canvas_textures/default_texture_filter=0
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.106, 0.141, 0.188, 1)
-textures/canvas_textures/default_texture_filter=0

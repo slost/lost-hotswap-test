@@ -6,30 +6,34 @@ Play the build: <https://slost.github.io/lost-hotswap-test/>
 
 Asset status: <https://slost.github.io/lost-hotswap-test/assets/status.html>
 
-Godot version: **4.8-beta1** (`godot --version` reports `4.8.beta1.official.4d10419ca`). Editor and export templates are downloaded from [godotengine/godot-builds](https://github.com/godotengine/godot-builds/releases/tag/4.8-beta1). Pre-release files are not on `godotengine/godot`, and the template directory uses `4.8.beta1` (a dot, not the hyphen in the tag).
+Manifest: <https://slost.github.io/lost-hotswap-test/assets/manifest.json>
+
+Godot version: **4.8-beta1** (`godot --version` reports `4.8.beta1.official.4d10419ca`). Editor and export templates come from [godotengine/godot-builds](https://github.com/godotengine/godot-builds/releases/tag/4.8-beta1). The template folder is `4.8.beta1` (a dot, not the hyphen in the tag). The Web export preset keeps thread support off.
 
 ## English
 
 ### What is in this repo
 
-A minimal Godot 4.8-beta project with the Lost Framework addon enabled. Remote mode is on. `lost_framework/asset_manager/base_url` is the Pages URL above. The design notes live in `addons/lost_framework/modules/asset_manager/HOTSWAP.md`. The game-repo template is installed from `addons/lost_framework/resources/templates/hotswap/` (`tools/make_manifest.py`, `tools/install_godot.sh`, `assets/expected_ids.txt`, the Pages workflow, and a Web export preset with thread support off).
+A minimal Godot 4.8-beta project. The addon under `addons/lost_framework/` is the Lost framework from `slost/lost-ecosystem` commit `6c34a2adf7efafdb8f38eb098197ce87fd3e1022`. Design notes are in `addons/lost_framework/modules/asset_manager/HOTSWAP.md`.
 
-The draft PR <https://github.com/slost/lost-ecosystem/pull/19> (branch `cursor/hotswap-asset-manager-7ed0`) was not readable from the environment that built this test. The GitHub API returns 404 for `slost/lost-ecosystem`, and this agent's credentials only include `slost/lost-hotswap-test`. There is no upstream commit SHA to record, and framework fixes could not be pushed back to that branch. The addon in this repo is the hot-swap contract described for that PR: the remote-manifest overlay, `HotSwapSprite`, `HotSwapTextureRect`, `HotSwapAudio`, and the Pages template.
+Lost loads modules from `res://lost/assigned_modules.json`. This demo activates `asset_manager` and `audio_manager`. Autoloads, in order, are Refs, Rng, SignalBus, Lost, Audio, SaveManager, and Settings. There is no Asset autoload. Remote mode is on. `lost_framework/asset_manager/base_url` is `assets/`, which the web build resolves against the page URL.
+
+The demo scene uses `HotSwapSprite` (`tex_player`), `HotSwapTextureRect` (`ui_logo`), and `HotSwapAudio` (`bgm_menu` looping once the remote file arrives, plus `sfx_jump`). The on-screen label reads `Assets.is_placeholder` and the texture size. **Play sfx_jump** plays the jump stream. **Reload (R)** calls `Assets.manager.reload()`.
+
+One vendored script is patched so this project can boot. See the report on `settings.module.gd`: it referenced a `Game` autoload that does not exist here, and Godot 4.8-beta1 refused to parse the script.
 
 ### How to upload a file
 
-1. Pick an id from `assets/expected_ids.txt`.
-2. Save the file in `assets/` using that id as the name: `assets/<id>.png` for a texture, or `assets/<id>.ogg` for audio. Do not rename the extension.
-3. Commit and push to `main`. A push that only adds or changes files under `assets/` republishes the site without running Godot. Any other change exports the web build again.
-4. An id with no file is intentional. The game draws a placeholder for it. This repo starts with `ui_logo` missing so that placeholder stays visible.
+1. Pick an id from `assets/expected_ids.txt` (one id per line).
+2. Save the file in `assets/` as `assets/<id>.png` (or webp/jpg) or `assets/<id>.ogg` (or mp3/wav). The id is the file name without the extension, lowercased.
+3. Commit and push to `main`. The Pages workflow caches the web export with a hash of every file outside `assets/`. A push that only changes `assets/` reuses that export and does not run Godot. Any other change exports again.
+4. An id with no file stays on the built-in placeholder (magenta checkerboard or beep).
 
-The `assets/` folder is marked with `.gdignore`, so Godot does not bake those files into the game package. Players download them from the manifest after the page loads.
+The `assets/` folder has `.gdignore`, and the Web preset excludes `assets/` and `tools/`, so those files are not packed into the game. The workflow writes `assets/manifest.json` and `assets/status.html` on the site. `bgm_` files are marked `"loop": true`.
 
 ### How to view status
 
-Open <https://slost.github.io/lost-hotswap-test/assets/status.html>. The table lists every expected id, whether the file is present, and its sha256. The game itself is at <https://slost.github.io/lost-hotswap-test/>. The on-screen label (and the text box at the bottom of the page) shows each id as `remote` or `placeholder`. Add `?assets=off` to the game URL to keep every id on its placeholder.
-
-Buttons: **Play sfx_jump** plays the jump sound, **Reload (R)** calls `AssetManager.reload()` and fetches the manifest again.
+Open <https://slost.github.io/lost-hotswap-test/assets/status.html>. The game is at <https://slost.github.io/lost-hotswap-test/>. Add `?assets=off` to keep every id on its placeholder. The label at the bottom of the page mirrors the in-game status, including texture size, so a reload can show that a new file arrived.
 
 ## ภาษาไทย
 
@@ -39,21 +43,27 @@ Buttons: **Play sfx_jump** plays the jump sound, **Reload (R)** calls `AssetMana
 
 หน้าสถานะไฟล์: <https://slost.github.io/lost-hotswap-test/assets/status.html>
 
-เวอร์ชัน Godot คือ **4.8-beta1** (สตริงเวอร์ชันจากตัวเอดิเตอร์คือ `4.8.beta1`) ดาวน์โหลดจาก `godotengine/godot-builds` เพราะไฟล์เบต้าไม่อยู่ที่รีโป stable และโฟลเดอร์เทมเพลตใช้จุด (`4.8.beta1`) ไม่ใช่ขีดในชื่อแท็ก
+manifest: <https://slost.github.io/lost-hotswap-test/assets/manifest.json>
 
-แอดออนในรีโปนี้ทำตามสัญญาที่อธิบายไว้ใน PR #19 ของ `slost/lost-ecosystem` สาขา `cursor/hotswap-asset-manager-7ed0` สภาพแวดล้อมที่ใช้สร้างรีโปทดสอบเข้าถึงรีโปนั้นไม่ได้ (GitHub ตอบ 404) จึงไม่มี SHA ของคอมมิตต้นทางให้บันทึก และส่งการแก้กลับไปที่สาขานั้นไม่ได้ รายละเอียดอยู่ใน `addons/lost_framework/modules/asset_manager/HOTSWAP.md`
+เวอร์ชัน Godot คือ **4.8-beta1** ดาวน์โหลดจาก `godotengine/godot-builds` โฟลเดอร์เทมเพลตใช้จุด (`4.8.beta1`) พรีเซ็ตเว็บปิด thread support
+
+แอดออนใน `addons/lost_framework/` คือเฟรมเวิร์ก Lost จากคอมมิต `6c34a2adf7efafdb8f38eb098197ce87fd3e1022` ของ `slost/lost-ecosystem` รายละเอียดอยู่ใน `addons/lost_framework/modules/asset_manager/HOTSWAP.md`
+
+Lost โหลดโมดูลจาก `res://lost/assigned_modules.json` เดโมนี้เปิด `asset_manager` กับ `audio_manager` ออโตโหลดเรียงเป็น Refs, Rng, SignalBus, Lost, Audio, SaveManager, Settings ไม่มีออโตโหลดชื่อ Asset โหมดรีโมตเปิดอยู่ และ `base_url` คือ `assets/` ซึ่งบนเว็บจะต่อท้ายที่อยู่ของหน้าเกม
+
+ฉากเดโมใช้ `HotSwapSprite` (`tex_player`), `HotSwapTextureRect` (`ui_logo`) และ `HotSwapAudio` (`bgm_menu` จะวนเมื่อไฟล์รีโมตมาถึง และ `sfx_jump`) ป้ายบนจออ่านจาก `Assets.is_placeholder` พร้อมขนาดรูป ปุ่ม **Play sfx_jump** เล่นเสียงกระโดด ปุ่ม **Reload (R)** เรียก `Assets.manager.reload()`
+
+มีจุดที่แก้ในแอดออนที่คัดลอกมาหนึ่งไฟล์ เพื่อให้โปรเจกต์บูตได้: `settings.module.gd` อ้างออโตโหลดชื่อ `Game` ที่โปรเจกต์นี้ไม่มี และ Godot 4.8-beta1 แปลสคริปต์ไม่ผ่าน
 
 ### วิธีอัปโหลดไฟล์
 
-1. เลือก id จาก `assets/expected_ids.txt`
-2. วางไฟล์ลงในโฟลเดอร์ `assets/` โดยใช้ id เป็นชื่อไฟล์: รูปคือ `assets/<id>.png` เสียงคือ `assets/<id>.ogg` ห้ามเปลี่ยนนามสกุล
-3. คอมมิตแล้ว push ขึ้นสาขา `main` ถ้าคอมมิตนั้นแก้เฉพาะไฟล์ใน `assets/` เวิร์กโฟลว์จะเผยแพร่ไซต์ใหม่โดยไม่เอ็กซ์พอร์ต Godot ถ้ามีไฟล์อื่นเปลี่ยนด้วย จะเอ็กซ์พอร์ตเว็บใหม่ทั้งก้อน
-4. id ที่ยังไม่มีไฟล์เป็นของที่ตั้งใจเว้นไว้ เกมจะแสดงภาพหรือเสียงสำรอง (placeholder) รีโปนี้เริ่มต้นโดยยังไม่ใส่ไฟล์ของ `ui_logo` เพื่อให้เห็น placeholder บนจอ
+1. เลือก id จาก `assets/expected_ids.txt` (หนึ่ง id ต่อหนึ่งบรรทัด)
+2. วางไฟล์ในโฟลเดอร์ `assets/` ชื่อ `assets/<id>.png` (หรือ webp/jpg) หรือ `assets/<id>.ogg` (หรือ mp3/wav) id คือชื่อไฟล์ไม่รวมนามสกุล และเป็นตัวพิมพ์เล็ก
+3. คอมมิตแล้ว push ขึ้น `main` เวิร์กโฟลว์แคชไฟล์เว็บจากแฮชของทุกไฟล์นอก `assets/` ถ้าคอมมิตแก้เฉพาะใน `assets/` จะใช้แคชนั้นและไม่รัน Godot ถ้ามีไฟล์อื่นเปลี่ยน จะเอ็กซ์พอร์ตใหม่
+4. id ที่ยังไม่มีไฟล์จะค้างที่ placeholder (ตารางหมากรุกสีม่วง หรือเสียงบี๊บ)
 
-โฟลเดอร์ `assets/` มีไฟล์ `.gdignore` เพื่อไม่ให้ Godot ฝังไฟล์เหล่านี้ลงในแพ็กเกจเกม ผู้เล่นจะดาวน์โหลดจาก manifest หลังเปิดหน้าเว็บ
+โฟลเดอร์ `assets/` มี `.gdignore` และพรีเซ็ตเว็บไม่แพ็ก `assets/` กับ `tools/` เวิร์กโฟลว์สร้าง `assets/manifest.json` และ `assets/status.html` บนไซต์ ไฟล์ที่ขึ้นต้นด้วย `bgm_` จะได้ `"loop": true`
 
 ### วิธีดูหน้าสถานะ
 
-เปิด <https://slost.github.io/lost-hotswap-test/assets/status.html> จะเห็นตารางของทุก id ว่ามีไฟล์แล้วหรือยัง พร้อมค่า sha256 ตัวเกมอยู่ที่ <https://slost.github.io/lost-hotswap-test/> ป้ายข้อความบนจอ (และกล่องข้อความมุมล่างของหน้าเว็บ) บอกแต่ละ id ว่าเป็น `remote` หรือ `placeholder` ถ้าต้องการบังคับให้ทุก id เป็น placeholder ให้เปิดเกมพร้อม `?assets=off`
-
-ปุ่ม **Play sfx_jump** เล่นเสียงกระโดด ปุ่ม **Reload (R)** เรียก `AssetManager.reload()` แล้วดึง manifest ใหม่
+เปิด <https://slost.github.io/lost-hotswap-test/assets/status.html> ตัวเกมอยู่ที่ <https://slost.github.io/lost-hotswap-test/> ถ้าต้องการบังคับให้ทุก id เป็น placeholder ให้เปิดเกมพร้อม `?assets=off` ป้ายมุมล่างของหน้าเว็บสะท้อนข้อความในเกม รวมถึงขนาดรูป เพื่อให้กด Reload แล้วเห็นว่าไฟล์ใหม่มาถึง

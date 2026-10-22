@@ -1,172 +1,283 @@
 #!/usr/bin/env python3
-"""Build the hot-swap manifest and the assets/status.html page.
+"""Scan a hot-swap folder and write manifest.json (and an optional status page).
 
-Reads assets/expected_ids.txt. Each non-comment line is "<id> <texture|audio>".
-A texture id expects assets/<id>.png. An audio id expects assets/<id>.ogg.
-Missing files stay in the manifest with present=false so the game can show
-a placeholder. The Pages workflow copies the result into the published site.
+Usage:
+  python tools/make_manifest.py assets/
+  python tools/make_manifest.py assets/ -o build/web/assets/manifest.json \
+         --status build/web/assets/status.html
+  python tools/make_manifest.py assets/ --strict     # exit 1 on any warning
+
+Rules:
+  * ID = file name without extension, lowercased.
+    sfx_jump.ogg -> "sfx_jump"
+    sfx.scissors.use.ogg -> "sfx.scissors.use" (matches a Lost AssetEntry key)
+  * Valid ID: a letter, then a-z, 0-9, or underscore, with optional ".segment" pieces.
+  * Sub-folders are scanned. "file" keeps the relative path (case preserved,
+    because GitHub Pages URLs are case-sensitive).
+  * Duplicate IDs (sfx_jump.ogg + sfx_jump.wav): the preferred extension wins.
+  * expected_ids.txt (one ID per line, # comments) drives the status page.
+  * Ids that start with bgm_ or bgm. are marked "loop": true.
+
+Python 3.8+, standard library only.
 """
-
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import hashlib
 import html
 import json
-import shutil
+import re
+import sys
+import time
 from pathlib import Path
 
-
-TYPES = {
-    "texture": ".png",
-    "audio": ".ogg",
+TEXTURE_EXTS = [".png", ".webp", ".jpg", ".jpeg"]
+AUDIO_EXTS = [".ogg", ".mp3", ".wav"]
+PREFERENCE = {ext: index for index, ext in enumerate(AUDIO_EXTS + TEXTURE_EXTS)}
+KNOWN_PREFIXES = {
+    "tex_": "texture",
+    "spr_": "texture",
+    "ui_": "texture",
+    "bg_": "texture",
+    "sfx_": "audio",
+    "bgm_": "audio",
+    "vo_": "audio",
+    "amb_": "audio",
+    "tex.": "texture",
+    "spr.": "texture",
+    "ui.": "texture",
+    "bg.": "texture",
+    "sfx.": "audio",
+    "bgm.": "audio",
+    "vo.": "audio",
+    "amb.": "audio",
 }
+IGNORED_NAMES = {"manifest.json", "expected_ids.txt", "status.html", "readme.md", ".gdignore"}
+ID_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
+SEGMENT_RE = re.compile(r"^[A-Za-z0-9_\-.]+$")
+
+warnings: list[str] = []
 
 
-def project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+def warn(msg: str) -> None:
+    warnings.append(msg)
+    print(f"WARNING: {msg}", file=sys.stderr)
 
 
-def read_expected(path: Path) -> list[tuple[str, str]]:
-    rows: list[tuple[str, str]] = []
-    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        line = raw.split("#", 1)[0].strip()
+def asset_type(ext: str) -> str | None:
+    if ext in TEXTURE_EXTS:
+        return "texture"
+    if ext in AUDIO_EXTS:
+        return "audio"
+    return None
+
+
+def matching_prefix(asset_id: str) -> str | None:
+    matches = [prefix for prefix in KNOWN_PREFIXES if asset_id.startswith(prefix)]
+    if not matches:
+        return None
+    return max(matches, key=len)
+
+
+def short_sha1(path: Path) -> str:
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 16), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:10]
+
+
+def should_loop(asset_id: str) -> bool:
+    return asset_id.startswith("bgm_") or asset_id.startswith("bgm.")
+
+
+def scan(folder: Path) -> dict:
+    warnings.clear()
+    candidates: dict[str, list[tuple[Path, str]]] = {}
+    for path in sorted(folder.rglob("*")):
+        rel = path.relative_to(folder)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        if path.is_dir() or path.name.lower() in IGNORED_NAMES or path.suffix.lower() == ".import":
+            continue
+        ext = path.suffix.lower()
+        kind = asset_type(ext)
+        if kind is None:
+            warn(
+                f"{rel.as_posix()}: unsupported file type '{ext or '(none)'}' - skipped "
+                f"(use {', '.join(AUDIO_EXTS + TEXTURE_EXTS)})"
+            )
+            continue
+        if path.stat().st_size == 0:
+            warn(f"{rel.as_posix()}: file is empty (0 bytes) - skipped")
+            continue
+        skipped = False
+        for seg in rel.parts[:-1]:
+            if not SEGMENT_RE.match(seg):
+                warn(f"{rel.as_posix()}: folder name '{seg}' has spaces or special characters - skipped")
+                skipped = True
+                break
+        if skipped:
+            continue
+        asset_id = path.stem.lower()
+        if not ID_RE.match(asset_id):
+            warn(
+                f"{rel.as_posix()}: invalid name '{path.stem}' - use a-z, 0-9, underscore, "
+                f"and optional dots, and start with a letter (for example sfx_jump{ext}) - skipped"
+            )
+            continue
+        if path.stem != asset_id:
+            warn(
+                f"{rel.as_posix()}: name has uppercase letters; ID becomes '{asset_id}' "
+                "(please rename the file to lowercase)"
+            )
+        prefix = matching_prefix(asset_id)
+        if prefix is None:
+            warn(
+                f"{rel.as_posix()}: '{asset_id}' has no known prefix "
+                f"({', '.join(sorted(KNOWN_PREFIXES))})"
+            )
+        elif KNOWN_PREFIXES[prefix] != kind:
+            warn(f"{rel.as_posix()}: prefix suggests a different type than '{kind}'")
+        candidates.setdefault(asset_id, []).append((path, kind))
+
+    assets: dict[str, dict] = {}
+    for asset_id in sorted(candidates):
+        files = sorted(
+            candidates[asset_id],
+            key=lambda item: (PREFERENCE.get(item[0].suffix.lower(), 99), str(item[0])),
+        )
+        path, kind = files[0]
+        if len(files) > 1:
+            others = ", ".join(other.relative_to(folder).as_posix() for other, _kind in files[1:])
+            warn(
+                f"duplicate ID '{asset_id}': using {path.relative_to(folder).as_posix()}, ignoring {others}"
+            )
+        entry = {
+            "file": path.relative_to(folder).as_posix(),
+            "type": kind,
+            "hash": short_sha1(path),
+            "size": path.stat().st_size,
+        }
+        if should_loop(asset_id):
+            entry["loop"] = True
+        assets[asset_id] = entry
+    return {"version": int(time.time()), "assets": assets}
+
+
+def read_expected(path: Path) -> list[str]:
+    ids: list[str] = []
+    if not path.is_file():
+        return ids
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip().lower()
         if not line:
             continue
-        parts = line.split()
-        if len(parts) != 2 or parts[1] not in TYPES:
-            raise SystemExit(
-                f"{path}:{line_number}: expected '<id> texture' or '<id> audio', got {raw!r}"
-            )
-        rows.append((parts[0], parts[1]))
-    if not rows:
-        raise SystemExit(f"{path} did not list any asset ids")
-    return rows
+        if not ID_RE.match(line):
+            warn(f"{path.name}: invalid expected ID '{line}'")
+        if line not in ids:
+            ids.append(line)
+    return ids
 
 
-def build_entries(assets_dir: Path, rows: list[tuple[str, str]]) -> list[dict]:
-    entries: list[dict] = []
-    for asset_id, asset_type in rows:
-        file_name = asset_id + TYPES[asset_type]
-        file_path = assets_dir / file_name
-        entry: dict = {
-            "id": asset_id,
-            "type": asset_type,
-            "file": file_name,
-            "present": file_path.is_file(),
-        }
-        if file_path.is_file():
-            data = file_path.read_bytes()
-            entry["sha256"] = hashlib.sha256(data).hexdigest()
-            entry["bytes"] = len(data)
+def human_size(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB"):
+        if value < 1024 or unit == "MB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return str(size)
+
+
+def write_status(path: Path, manifest: dict, expected: list[str], warns: list[str]) -> None:
+    assets = manifest["assets"]
+    rows = []
+    for asset_id in expected:
+        if asset_id in assets:
+            entry = assets[asset_id]
+            rows.append(("ok", asset_id, entry["file"], human_size(entry["size"])))
         else:
-            entry["sha256"] = None
-            entry["bytes"] = 0
-        entries.append(entry)
-    return entries
-
-
-def status_page(entries: list[dict], generated_at: str) -> str:
-    body_rows = []
-    for entry in entries:
-        state = "present" if entry["present"] else "missing"
-        digest = entry["sha256"] or "—"
-        size = str(entry["bytes"]) if entry["present"] else "—"
-        if entry["present"]:
-            link = f'<a href="{html.escape(entry["file"])}">{html.escape(entry["file"])}</a>'
-        else:
-            link = "—"
-        body_rows.append(
-            "<tr>"
-            f"<td><code>{html.escape(entry['id'])}</code></td>"
-            f"<td>{html.escape(entry['type'])}</td>"
-            f"<td>{state}</td>"
-            f"<td>{size}</td>"
-            f"<td><code>{html.escape(digest)}</code></td>"
-            f"<td>{link}</td>"
-            "</tr>"
-        )
-    rows_html = "\n".join(body_rows)
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hot-swap asset status</title>
-<style>
-  body {{ font: 16px/1.45 system-ui, sans-serif; margin: 2rem; color: #172026; background: #f6f7f4; }}
-  table {{ border-collapse: collapse; background: white; }}
-  th, td {{ border: 1px solid #d5dbd6; padding: 0.4rem 0.7rem; text-align: left; vertical-align: top; }}
-  th {{ background: #e7eee8; }}
-  code {{ font-family: ui-monospace, monospace; }}
-  .missing {{ color: #8a3b12; }}
-</style>
-</head>
-<body>
-<h1>Hot-swap asset status</h1>
-<p>Generated {html.escape(generated_at)}. Drop <code>&lt;id&gt;.png</code> or <code>&lt;id&gt;.ogg</code> into <code>assets/</code> and push to <code>main</code>. A commit that only touches <code>assets/</code> republishes this page without a Godot export.</p>
-<p>สถานะไฟล์ hot-swap สร้างเมื่อ {html.escape(generated_at)}. วางไฟล์ชื่อ <code>&lt;id&gt;.png</code> หรือ <code>&lt;id&gt;.ogg</code> ลงใน <code>assets/</code> แล้ว push ขึ้น <code>main</code>. ถ้าคอมมิตแก้เฉพาะใน <code>assets/</code> หน้านี้จะถูกเผยแพร่ใหม่โดยไม่เอ็กซ์พอร์ต Godot</p>
-<table>
-<thead>
-<tr><th>id</th><th>type</th><th>state</th><th>bytes</th><th>sha256</th><th>file</th></tr>
-</thead>
-<tbody>
-{rows_html}
-</tbody>
-</table>
-</body>
-</html>
-"""
-
-
-def write_outputs(root: Path, site: Path | None) -> list[dict]:
-    assets_dir = root / "assets"
-    rows = read_expected(assets_dir / "expected_ids.txt")
-    entries = build_entries(assets_dir, rows)
-    generated_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    manifest = {
-        "format": 1,
-        "generated_at": generated_at,
-        "assets": entries,
+            rows.append(("missing", asset_id, "", ""))
+    for asset_id in assets:
+        if asset_id not in expected:
+            entry = assets[asset_id]
+            rows.append(("extra", asset_id, entry["file"], human_size(entry["size"])))
+    done = sum(1 for row in rows if row[0] == "ok")
+    label = {
+        "ok": "ready / อัปแล้ว",
+        "missing": "still placeholder / ยังเป็น placeholder",
+        "extra": "not in the list / ไม่อยู่ในรายการ",
     }
-    text = json.dumps(manifest, indent=2) + "\n"
-    page = status_page(entries, generated_at)
-    (root / "manifest.json").write_text(text, encoding="utf-8")
-    (assets_dir / "status.html").write_text(page, encoding="utf-8")
-    if site is not None:
-        site.mkdir(parents=True, exist_ok=True)
-        (site / "manifest.json").write_text(text, encoding="utf-8")
-        published = site / "assets"
-        if published.exists():
-            shutil.rmtree(published)
-        published.mkdir()
-        for entry in entries:
-            if not entry["present"]:
-                continue
-            shutil.copy2(assets_dir / entry["file"], published / entry["file"])
-        shutil.copy2(assets_dir / "expected_ids.txt", published / "expected_ids.txt")
-        (published / "status.html").write_text(page, encoding="utf-8")
-    return entries
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=project_root())
-    parser.add_argument(
-        "--site",
-        type=Path,
-        default=None,
-        help="Also write manifest.json and assets/ into this published directory.",
+    body_rows = "\n".join(
+        f'<tr class="{state}"><td>{html.escape(label[state])}</td>'
+        f"<td><code>{html.escape(asset_id)}</code></td>"
+        f"<td>{html.escape(filename)}</td><td>{size}</td></tr>"
+        for state, asset_id, filename, size in rows
     )
+    warn_html = "".join(f"<li>{html.escape(item)}</li>" for item in warns) or "<li>None / ไม่มี</li>"
+    built = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(manifest["version"]))
+    pct = int(100 * done / len(expected)) if expected else 100
+    path.write_text(
+        f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Asset status / สถานะแอสเซ็ต</title>
+<style>
+ body{{font-family:system-ui,sans-serif;max-width:900px;margin:2em auto;padding:0 1em;background:#1b1b22;color:#eee}}
+ table{{border-collapse:collapse;width:100%}} td,th{{padding:.4em .6em;border-bottom:1px solid #333;text-align:left}}
+ tr.ok td:first-child{{color:#6f6}} tr.missing td:first-child{{color:#fc6}} tr.extra td:first-child{{color:#8cf}}
+ .bar{{background:#333;border-radius:6px;overflow:hidden;height:14px}} .bar>div{{background:#6c6;height:100%;width:{pct}%}}
+ code{{color:#f9c}} a{{color:#8cf}}
+</style></head><body>
+<h1>Asset status / สถานะแอสเซ็ต</h1>
+<p>Ready / เสร็จแล้ว <b>{done}/{len(expected)}</b>
+· updated / อัปเดต {html.escape(built)} ·
+<a href="manifest.json">manifest.json</a> · <a href="../">open the game / เปิดเกม</a></p>
+<p>Files named <code>bgm_*</code> or <code>bgm.*</code> loop. / ไฟล์ที่ขึ้นต้นด้วย bgm_ หรือ bgm. จะเล่นวน</p>
+<div class="bar"><div></div></div>
+<table><thead><tr><th>Status / สถานะ</th><th>ID</th><th>File / ไฟล์</th><th>Size / ขนาด</th></tr></thead>
+<tbody>
+{body_rows}
+</tbody></table>
+<h2>Warnings / คำเตือน</h2><ul>{warn_html}</ul>
+</body></html>
+""",
+        encoding="utf-8",
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("folder", type=Path, help="asset folder to scan (for example assets/)")
+    parser.add_argument("-o", "--output", type=Path, help="manifest path (default: <folder>/manifest.json)")
+    parser.add_argument("--expected", type=Path, help="expected IDs file (default: <folder>/expected_ids.txt)")
+    parser.add_argument("--status", type=Path, help="also write an HTML status page here")
+    parser.add_argument("--strict", action="store_true", help="exit with code 1 if there were warnings")
     args = parser.parse_args()
-    entries = write_outputs(args.root.resolve(), args.site.resolve() if args.site else None)
-    present = sum(1 for entry in entries if entry["present"])
-    print(f"manifest: {present}/{len(entries)} files present")
-    for entry in entries:
-        state = "present" if entry["present"] else "MISSING"
-        print(f"  {entry['id']}: {state}")
+
+    folder: Path = args.folder
+    if not folder.is_dir():
+        print(f"ERROR: {folder} is not a folder", file=sys.stderr)
+        return 2
+    manifest = scan(folder)
+    out = args.output or folder / "manifest.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Wrote {out} ({len(manifest['assets'])} assets)")
+
+    expected = read_expected(args.expected or folder / "expected_ids.txt")
+    missing = [asset_id for asset_id in expected if asset_id not in manifest["assets"]]
+    if expected:
+        print(
+            f"Expected: {len(expected) - len(missing)}/{len(expected)} present"
+            + (f"; still placeholder: {', '.join(missing)}" if missing else "")
+        )
+    if args.status:
+        args.status.parent.mkdir(parents=True, exist_ok=True)
+        write_status(args.status, manifest, expected, warnings)
+        print(f"Wrote {args.status}")
+    return 1 if (args.strict and warnings) else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

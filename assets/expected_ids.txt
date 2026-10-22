@@ -1,8 +1,7 @@
-# Hot-swap drop folder. One "<id> <type>" per line.
-# texture -> assets/<id>.png
-# audio    -> assets/<id>.ogg
-# Leave a file out on purpose and the game keeps that id on a placeholder.
-tex_player texture
-ui_logo texture
-bgm_menu audio
-sfx_jump audio
+# Asset IDs the demo asks for. One ID per line. '#' starts a comment.
+# tools/make_manifest.py uses this file for assets/status.html.
+# An ID with no file stays on the built-in placeholder.
+tex_player
+ui_logo
+bgm_menu
+sfx_jump
